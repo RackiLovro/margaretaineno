@@ -30,7 +30,10 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className="font-body antialiased">{children}</body>
+      <body className="font-body antialiased">
+        <div className="bg-sunset" aria-hidden />
+        {children}
+      </body>
     </html>
   );
 }

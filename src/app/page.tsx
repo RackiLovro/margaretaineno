@@ -56,10 +56,12 @@ export default function Page() {
       let ok = 0;
       for (let i = 0; i < arr.length; i++) {
         const file = arr[i];
-        setProgress(`Slanje ${i + 1}/${arr.length}: ${file.name}`);
-        const fd = new FormData();
-        fd.append("file", file);
+        setProgress(`Priprema ${i + 1}/${arr.length}: ${file.name}`);
         try {
+          const prepared = await compressImage(file);
+          setProgress(`Slanje ${i + 1}/${arr.length}: ${file.name}`);
+          const fd = new FormData();
+          fd.append("file", prepared.file, prepared.name);
           const r = await fetch(
             `/api/upload${gateKey ? `?k=${gateKey}` : ""}`,
             { method: "POST", body: fd }
@@ -440,10 +442,59 @@ function Footer() {
   );
 }
 
+/* ---------- Helper: compress/resize image in-browser before upload ---------- */
+// Avoids Vercel's 4.5 MB serverless body limit and speeds up uploads
+// from phones. Resizes to max 2048px on the long edge, re-encodes as
+// JPEG @ 0.85 quality. HEIC files are decoded by the browser's canvas
+// (Safari supports it; Chrome/Firefox may fall through to the raw file
+// if they can't decode — the server still accepts those).
+const MAX_DIM = 2048;
+const JPEG_QUALITY = 0.85;
+
+async function compressImage(file: File): Promise<{ file: Blob; name: string }> {
+  const baseName = file.name.replace(/\.[^.]+$/, "");
+  // If it's already small enough and a web-friendly format, send as-is.
+  const webFriendly = /\.(jpe?g|png|webp)$/i.test(file.name);
+  if (webFriendly && file.size <= 4_000_000) {
+    return { file, name: file.name };
+  }
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_DIM / Math.max(bitmap.width, bitmap.height));
+    const w = Math.round(bitmap.width * scale);
+    const h = Math.round(bitmap.height * scale);
+    const canvas =
+      typeof OffscreenCanvas !== "undefined"
+        ? new OffscreenCanvas(w, h)
+        : Object.assign(document.createElement("canvas"), {
+            width: w,
+            height: h,
+          });
+    const ctx = (canvas as HTMLCanvasElement | OffscreenCanvas).getContext(
+      "2d"
+    ) as CanvasRenderingContext2D;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    const blob: Blob = (canvas as OffscreenCanvas).convertToBlob
+      ? await (canvas as OffscreenCanvas).convertToBlob({
+          type: "image/jpeg",
+          quality: JPEG_QUALITY,
+        })
+      : await new Promise<Blob>((resolve) =>
+          (canvas as HTMLCanvasElement).toBlob(
+            (b) => resolve(b!),
+            "image/jpeg",
+            JPEG_QUALITY
+          )
+        );
+    bitmap.close?.();
+    return { file: blob, name: `${baseName}.jpg` };
+  } catch {
+    // Couldn't decode (e.g. HEIC on non-Safari). Send original; server handles it.
+    return { file, name: file.name };
+  }
+}
+
 /* ---------- Helper: password from ?k= if present ---------- */
-// Returns "" when there is no gate (GALLERY_PASSWORD unset) and
-// null while we're still reading from URL/sessionStorage.
-// Anything else means we have a key to use.
 function useGateKey() {
   const [key, setKey] = useState<string | null>(null);
   const [gated, setGated] = useState(false);

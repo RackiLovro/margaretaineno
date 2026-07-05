@@ -7,13 +7,25 @@
   --font-inter: "Inter", system-ui, sans-serif;
 }
 
-html,
+html {
+  background-color: #2a0e1f;
+  min-height: 100%;
+}
+
 body {
-  background: linear-gradient(180deg, #2a0e1f 0%, #3a1141 35%, #4a1d4f 70%, #7e22ce 100%);
-  background-attachment: fixed;
   min-height: 100vh;
   color: #fdf6ec;
   -webkit-font-smoothing: antialiased;
+  position: relative;
+}
+
+/* Fixed full-viewport gradient that stays put during scroll/overscroll. */
+.bg-sunset {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(180deg, #2a0e1f 0%, #3a1141 35%, #4a1d4f 70%, #7e22ce 100%);
+  background-size: cover;
 }
 
 /* sunset glow behind hero */
