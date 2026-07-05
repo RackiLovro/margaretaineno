@@ -27,6 +27,8 @@ export default function Page() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   // Cookie-based auth via middleware — no client-side key juggling needed.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadedOnce, setLoadedOnce] = useState(false);
   const loadPhotos = useCallback(async () => {
     setLoading(true);
     try {
@@ -35,10 +37,13 @@ export default function Page() {
       if (!r.ok) throw new Error(data.error || "Failed to load");
       setPhotos(data.photos ?? []);
       setError(null);
+      setLoadFailed(false);
+      setLoadedOnce(true);
     } catch {
-      // Transient failure — show empty state, retry in bg.
+      // Transient failure — show empty state, flag for retry.
       setPhotos([]);
       setError(null);
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -48,12 +53,13 @@ export default function Page() {
     loadPhotos();
   }, [loadPhotos]);
 
-  // Retry once after a short delay if the first load came back empty.
+  // Retry once after a short delay ONLY if the first load actually failed
+  // (not when the gallery is legitimately empty).
   useEffect(() => {
-    if (loading || photos.length > 0) return;
+    if (!loadFailed || loading) return;
     const t = setTimeout(loadPhotos, 2500);
     return () => clearTimeout(t);
-  }, [loading, photos.length, loadPhotos]);
+  }, [loadFailed, loading, loadPhotos]);
 
   const uploadFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -63,37 +69,38 @@ export default function Page() {
       let ok = 0;
       let failed = 0;
 
-      // Process 3 at a time so one slow photo doesn't block the rest.
-      const CONCURRENCY = 3;
-      let i = 0;
-      async function worker() {
-        while (i < arr.length) {
-          const idx = i++;
-          const file = arr[idx];
-          try {
-            setProgress(`Priprema ${idx + 1}/${arr.length}: ${file.name}`);
-            const prepared = await compressImage(file);
-            setProgress(`Slanje ${idx + 1}/${arr.length}: ${file.name}`);
-            const fd = new FormData();
-            fd.append("file", prepared.file, prepared.name);
-            const r = await fetch("/api/upload", {
-              method: "POST",
-              body: fd,
-            });
-            if (!r.ok) {
-              const j = await r.json().catch(() => ({}));
-              throw new Error(j.error || `Upload failed (${r.status})`);
-            }
-            ok++;
-          } catch (e) {
-            failed++;
-            const msg = (e as Error).message;
-            if (failed <= 1) setError(`${msg} (1 od ${arr.length} neuspjelo)`);
-            else setError(`${msg} (${failed} od ${arr.length} neuspjelo)`);
+      // Serial uploads: Vercel Hobby caps serverless duration at ~10s.
+      // Parallel requests multiply the chance of hitting that cap.
+      // One at a time + retry keeps each request well under the limit.
+      for (let idx = 0; idx < arr.length; idx++) {
+        const file = arr[idx];
+        try {
+          setProgress(`Priprema ${idx + 1}/${arr.length}: ${file.name}`);
+          const prepared = await compressImage(file);
+          setProgress(`Slanje ${idx + 1}/${arr.length}: ${file.name}`);
+          const fd = new FormData();
+          fd.append("file", prepared.file, prepared.name);
+          // Retry once on 5xx (Vercel can transiently 502/504).
+          let r = await fetch("/api/upload", { method: "POST", body: fd });
+          if (r.status >= 500) {
+            await new Promise((res) => setTimeout(res, 1500));
+            const fd2 = new FormData();
+            const prepared2 = await compressImage(file);
+            fd2.append("file", prepared2.file, prepared2.name);
+            r = await fetch("/api/upload", { method: "POST", body: fd2 });
           }
+          if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            throw new Error(j.error || `Upload failed (${r.status})`);
+          }
+          ok++;
+        } catch (e) {
+          failed++;
+          const msg = (e as Error).message;
+          if (failed <= 1) setError(`${msg} (1 od ${arr.length} neuspjelo)`);
+          else setError(`${msg} (${failed} od ${arr.length} neuspjelo)`);
         }
       }
-      await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
       setProgress("");
       setUploading(false);
@@ -163,9 +170,9 @@ export default function Page() {
           </div>
         )}
 
-        {loading ? (
+        {loading || !loadedOnce ? (
           <SkeletonGrid />
-        ) : photos.length === 0 ?(
+        ) : photos.length === 0 ? (
           <EmptyState onPick={() => fileInput.current?.click()} />
         ) : (
           <div className="masonry columns-2 sm:columns-3 md:columns-4">
@@ -462,8 +469,8 @@ function Footer() {
 // JPEG @ 0.85 quality. HEIC files are decoded by the browser's canvas
 // (Safari supports it; Chrome/Firefox may fall through to the raw file
 // if they can't decode — the server still accepts those).
-const MAX_DIM = 1600;
-const JPEG_QUALITY = 0.8;
+const MAX_DIM = 1280;
+const JPEG_QUALITY = 0.72;
 
 async function compressImage(file: File): Promise<{ file: Blob; name: string }> {
   const baseName = file.name.replace(/\.[^.]+$/, "");

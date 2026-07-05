@@ -8,7 +8,8 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+// Vercel Hobby caps serverless duration at ~10s. We keep uploads serial
+// and aggressively compressed on the client so each fits well under that.
 
 export async function POST(req: Request) {
   if (!checkGate(req)) {
