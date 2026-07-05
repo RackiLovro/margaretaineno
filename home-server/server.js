@@ -22,7 +22,7 @@ const META_FILE = path.join(__dirname, "photos.json");
 
 const SECRET = process.env.STORAGE_SECRET || "change-me-please";
 const PORT = Number(process.env.PORT || 8787);
-const MAX_BYTES = 25 * 1024 * 1024;
+const MAX_BYTES = 60 * 1024 * 1024; // generous; client compresses to ~1-2 MB
 
 const ALLOWED_MIME = [
   "image/jpeg",
@@ -51,7 +51,19 @@ function requireSecret(req, res, next) {
 // --- Metadata helpers ---
 async function readMeta() {
   try {
-    return JSON.parse(await fs.readFile(META_FILE, "utf8"));
+    const raw = await fs.readFile(META_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.photos)) return { photos: [] };
+    // Drop entries whose files no longer exist on disk (corrupt/missing).
+    const present = [];
+    for (const p of parsed.photos) {
+      if (!p || !p.storedName) continue;
+      try {
+        await fs.access(path.join(PHOTOS_DIR, p.storedName));
+        present.push(p);
+      } catch {}
+    }
+    return { photos: present };
   } catch {
     return { photos: [] };
   }

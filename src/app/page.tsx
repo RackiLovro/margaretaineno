@@ -31,18 +31,27 @@ export default function Page() {
   const loadPhotos = useCallback(async () => {
     if (!ready) return;
     setLoading(true);
-    setError(null);
     try {
       const r = await fetch(`/api/photos${gateKey ? `?k=${gateKey}` : ""}`);
-      const data: PhotosResp = await r.json();
+      const data: PhotosResp = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error || "Failed to load");
-      setPhotos(data.photos);
+      setPhotos(data.photos ?? []);
+      setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      // Don't scare the user on first load — show empty state, retry in bg.
+      setPhotos([]);
+      setError(null);
     } finally {
       setLoading(false);
     }
   }, [gateKey, ready]);
+
+  // Retry once after a short delay if the first load came back empty.
+  useEffect(() => {
+    if (!ready || loading || photos.length > 0) return;
+    const t = setTimeout(loadPhotos, 2500);
+    return () => clearTimeout(t);
+  }, [ready, loading, photos.length, loadPhotos]);
 
   useEffect(() => {
     if (ready) loadPhotos();
@@ -54,27 +63,41 @@ export default function Page() {
       setError(null);
       const arr = Array.from(files);
       let ok = 0;
-      for (let i = 0; i < arr.length; i++) {
-        const file = arr[i];
-        setProgress(`Priprema ${i + 1}/${arr.length}: ${file.name}`);
-        try {
-          const prepared = await compressImage(file);
-          setProgress(`Slanje ${i + 1}/${arr.length}: ${file.name}`);
-          const fd = new FormData();
-          fd.append("file", prepared.file, prepared.name);
-          const r = await fetch(
-            `/api/upload${gateKey ? `?k=${gateKey}` : ""}`,
-            { method: "POST", body: fd }
-          );
-          if (!r.ok) {
-            const j = await r.json().catch(() => ({}));
-            throw new Error(j.error || `Upload failed (${r.status})`);
+      let failed = 0;
+
+      // Process 3 at a time so one slow photo doesn't block the rest.
+      const CONCURRENCY = 3;
+      let i = 0;
+      async function worker() {
+        while (i < arr.length) {
+          const idx = i++;
+          const file = arr[idx];
+          try {
+            setProgress(`Priprema ${idx + 1}/${arr.length}: ${file.name}`);
+            const prepared = await compressImage(file);
+            setProgress(`Slanje ${idx + 1}/${arr.length}: ${file.name}`);
+            const fd = new FormData();
+            fd.append("file", prepared.file, prepared.name);
+            const r = await fetch(
+              `/api/upload${gateKey ? `?k=${gateKey}` : ""}`,
+              { method: "POST", body: fd }
+            );
+            if (!r.ok) {
+              const j = await r.json().catch(() => ({}));
+              throw new Error(j.error || `Upload failed (${r.status})`);
+            }
+            ok++;
+          } catch (e) {
+            failed++;
+            // Don't overwrite a per-file error banner; accumulate last one.
+            const msg = (e as Error).message;
+            if (failed <= 1) setError(`${msg} (1 od ${arr.length} neuspjelo)`);
+            else setError(`${msg} (${failed} od ${arr.length} neuspjelo)`);
           }
-          ok++;
-        } catch (e) {
-          setError((e as Error).message);
         }
       }
+      await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+
       setProgress("");
       setUploading(false);
       if (ok > 0) {
@@ -305,7 +328,7 @@ function UploadCard({
         {uploading ? progress || "Slanje..." : "Dodaj fotografije"}
       </p>
       <p className="mt-1 font-body text-xs text-cream/60">
-        Dodirnite za odabir ili povucite slike ovdje · max 25 MB
+        Dodirnite za odabir ili povucite slike ovdje
       </p>
     </div>
   );
@@ -448,14 +471,14 @@ function Footer() {
 // JPEG @ 0.85 quality. HEIC files are decoded by the browser's canvas
 // (Safari supports it; Chrome/Firefox may fall through to the raw file
 // if they can't decode — the server still accepts those).
-const MAX_DIM = 2048;
-const JPEG_QUALITY = 0.85;
+const MAX_DIM = 1600;
+const JPEG_QUALITY = 0.8;
 
 async function compressImage(file: File): Promise<{ file: Blob; name: string }> {
   const baseName = file.name.replace(/\.[^.]+$/, "");
   // If it's already small enough and a web-friendly format, send as-is.
   const webFriendly = /\.(jpe?g|png|webp)$/i.test(file.name);
-  if (webFriendly && file.size <= 4_000_000) {
+  if (webFriendly && file.size <= 2_500_000) {
     return { file, name: file.name };
   }
   try {
