@@ -26,36 +26,34 @@ export default function Page() {
   const [progress, setProgress] = useState<string>("");
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const { key: gateKey, ready } = useGateKey();
-
+  // Cookie-based auth via middleware — no client-side key juggling needed.
   const loadPhotos = useCallback(async () => {
-    if (!ready) return;
     setLoading(true);
     try {
-      const r = await fetch(`/api/photos${gateKey ? `?k=${gateKey}` : ""}`);
+      const r = await fetch("/api/photos");
       const data: PhotosResp = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error || "Failed to load");
       setPhotos(data.photos ?? []);
       setError(null);
-    } catch (e) {
-      // Don't scare the user on first load — show empty state, retry in bg.
+    } catch {
+      // Transient failure — show empty state, retry in bg.
       setPhotos([]);
       setError(null);
     } finally {
       setLoading(false);
     }
-  }, [gateKey, ready]);
+  }, []);
+
+  useEffect(() => {
+    loadPhotos();
+  }, [loadPhotos]);
 
   // Retry once after a short delay if the first load came back empty.
   useEffect(() => {
-    if (!ready || loading || photos.length > 0) return;
+    if (loading || photos.length > 0) return;
     const t = setTimeout(loadPhotos, 2500);
     return () => clearTimeout(t);
-  }, [ready, loading, photos.length, loadPhotos]);
-
-  useEffect(() => {
-    if (ready) loadPhotos();
-  }, [ready, loadPhotos]);
+  }, [loading, photos.length, loadPhotos]);
 
   const uploadFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -78,10 +76,10 @@ export default function Page() {
             setProgress(`Slanje ${idx + 1}/${arr.length}: ${file.name}`);
             const fd = new FormData();
             fd.append("file", prepared.file, prepared.name);
-            const r = await fetch(
-              `/api/upload${gateKey ? `?k=${gateKey}` : ""}`,
-              { method: "POST", body: fd }
-            );
+            const r = await fetch("/api/upload", {
+              method: "POST",
+              body: fd,
+            });
             if (!r.ok) {
               const j = await r.json().catch(() => ({}));
               throw new Error(j.error || `Upload failed (${r.status})`);
@@ -89,7 +87,6 @@ export default function Page() {
             ok++;
           } catch (e) {
             failed++;
-            // Don't overwrite a per-file error banner; accumulate last one.
             const msg = (e as Error).message;
             if (failed <= 1) setError(`${msg} (1 od ${arr.length} neuspjelo)`);
             else setError(`${msg} (${failed} od ${arr.length} neuspjelo)`);
@@ -104,7 +101,7 @@ export default function Page() {
         await loadPhotos();
       }
     },
-    [gateKey, loadPhotos]
+    [loadPhotos]
   );
 
   const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -173,7 +170,7 @@ export default function Page() {
         ) : (
           <div className="masonry columns-2 sm:columns-3 md:columns-4">
             {photos.map((p) => (
-              <PhotoCard key={p.id} photo={p} gateKey={gateKey} onClick={() => setLightbox(p)} />
+              <PhotoCard key={p.id} photo={p} onClick={() => setLightbox(p)} />
             ))}
           </div>
         )}
@@ -184,7 +181,6 @@ export default function Page() {
       {lightbox && (
       <Lightbox
         photo={lightbox}
-        gateKey={gateKey}
         onClose={() => setLightbox(null)}
           onPrev={() => {
             const i = photos.findIndex((p) => p.id === lightbox.id);
@@ -337,18 +333,15 @@ function UploadCard({
 /* ---------- Photo card ---------- */
 function PhotoCard({
   photo,
-  gateKey,
   onClick,
 }: {
   photo: Photo;
-  gateKey: string;
   onClick: () => void;
 }) {
   const [loaded, setLoaded] = useState(false);
-  const qs = gateKey ? `?k=${gateKey}` : "";
   const thumb = photo.thumbnail
-    ? `${photo.thumbnail}${gateKey ? `&k=${gateKey}` : ""}`
-    : `/api/photo/${photo.id}?thumb=1${gateKey ? `&k=${gateKey}` : ""}`;
+    ? photo.thumbnail
+    : `/api/photo/${photo.id}?thumb=1`;
   return (
     <button
       onClick={onClick}
@@ -373,13 +366,11 @@ function PhotoCard({
 /* ---------- Lightbox ---------- */
 function Lightbox({
   photo,
-  gateKey,
   onClose,
   onPrev,
   onNext,
 }: {
   photo: Photo;
-  gateKey: string;
   onClose: () => void;
   onPrev: () => void;
   onNext: () => void;
@@ -396,7 +387,7 @@ function Lightbox({
         ‹
       </button>
       <img
-        src={`/api/photo/${photo.id}${gateKey ? `?k=${gateKey}` : ""}`}
+        src={`/api/photo/${photo.id}`}
         alt={photo.name}
         onClick={(e) => e.stopPropagation()}
         className="max-h-[88vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
@@ -515,36 +506,4 @@ async function compressImage(file: File): Promise<{ file: Blob; name: string }> 
     // Couldn't decode (e.g. HEIC on non-Safari). Send original; server handles it.
     return { file, name: file.name };
   }
-}
-
-/* ---------- Helper: password from ?k= if present ---------- */
-function useGateKey() {
-  const [key, setKey] = useState<string | null>(null);
-  const [gated, setGated] = useState(false);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const u = new URL(window.location.href);
-    const fromUrl = u.searchParams.get("k");
-    try {
-      const stored = sessionStorage.getItem("gateKey");
-      const k = fromUrl ?? stored ?? "";
-      if (fromUrl) sessionStorage.setItem("gateKey", fromUrl);
-      // Probe the server: does it require a gate at all?
-      fetch("/api/photos")
-        .then((r) => {
-          setGated(r.status === 401);
-          setKey(k);
-        })
-        .catch(() => {
-          setGated(false);
-          setKey(k);
-        });
-    } catch {
-      setKey("");
-    }
-  }, []);
-  // If the server has no gate, "" is a valid key (no auth needed).
-  // If it does, we need a non-empty key.
-  const ready = key !== null && (!gated || key !== "");
-  return { key: key ?? "", ready };
 }
