@@ -26,9 +26,10 @@ export default function Page() {
   const [progress, setProgress] = useState<string>("");
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const gateKey = useMemoGateKey();
+  const { key: gateKey, ready } = useGateKey();
 
   const loadPhotos = useCallback(async () => {
+    if (!ready) return;
     setLoading(true);
     setError(null);
     try {
@@ -41,11 +42,11 @@ export default function Page() {
     } finally {
       setLoading(false);
     }
-  }, [gateKey]);
+  }, [gateKey, ready]);
 
   useEffect(() => {
-    loadPhotos();
-  }, [loadPhotos]);
+    if (ready) loadPhotos();
+  }, [ready, loadPhotos]);
 
   const uploadFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -147,7 +148,7 @@ export default function Page() {
         ) : (
           <div className="masonry columns-2 sm:columns-3 md:columns-4">
             {photos.map((p) => (
-              <PhotoCard key={p.id} photo={p} onClick={() => setLightbox(p)} />
+              <PhotoCard key={p.id} photo={p} gateKey={gateKey} onClick={() => setLightbox(p)} />
             ))}
           </div>
         )}
@@ -156,9 +157,10 @@ export default function Page() {
       <Footer />
 
       {lightbox && (
-        <Lightbox
-          photo={lightbox}
-          onClose={() => setLightbox(null)}
+      <Lightbox
+        photo={lightbox}
+        gateKey={gateKey}
+        onClose={() => setLightbox(null)}
           onPrev={() => {
             const i = photos.findIndex((p) => p.id === lightbox.id);
             if (i > 0) setLightbox(photos[i - 1]);
@@ -310,13 +312,18 @@ function UploadCard({
 /* ---------- Photo card ---------- */
 function PhotoCard({
   photo,
+  gateKey,
   onClick,
 }: {
   photo: Photo;
+  gateKey: string;
   onClick: () => void;
 }) {
   const [loaded, setLoaded] = useState(false);
-  const thumb = photo.thumbnail || `/api/photo/${photo.id}?thumb=1`;
+  const qs = gateKey ? `?k=${gateKey}` : "";
+  const thumb = photo.thumbnail
+    ? `${photo.thumbnail}${gateKey ? `&k=${gateKey}` : ""}`
+    : `/api/photo/${photo.id}?thumb=1${gateKey ? `&k=${gateKey}` : ""}`;
   return (
     <button
       onClick={onClick}
@@ -341,11 +348,13 @@ function PhotoCard({
 /* ---------- Lightbox ---------- */
 function Lightbox({
   photo,
+  gateKey,
   onClose,
   onPrev,
   onNext,
 }: {
   photo: Photo;
+  gateKey: string;
   onClose: () => void;
   onPrev: () => void;
   onNext: () => void;
@@ -362,7 +371,7 @@ function Lightbox({
         ‹
       </button>
       <img
-        src={`/api/photo/${photo.id}`}
+        src={`/api/photo/${photo.id}${gateKey ? `?k=${gateKey}` : ""}`}
         alt={photo.name}
         onClick={(e) => e.stopPropagation()}
         className="max-h-[88vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
@@ -432,20 +441,36 @@ function Footer() {
 }
 
 /* ---------- Helper: password from ?k= if present ---------- */
-function useMemoGateKey() {
-  const [key, setKey] = useState("");
+// Returns "" when there is no gate (GALLERY_PASSWORD unset) and
+// null while we're still reading from URL/sessionStorage.
+// Anything else means we have a key to use.
+function useGateKey() {
+  const [key, setKey] = useState<string | null>(null);
+  const [gated, setGated] = useState(false);
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const u = new URL(window.location.href);
-      const k = u.searchParams.get("k") ?? "";
-      setKey(k);
-      try {
-        if (k) sessionStorage.setItem("gateKey", k);
-        else if (sessionStorage.getItem("gateKey")) {
-          setKey(sessionStorage.getItem("gateKey") ?? "");
-        }
-      } catch {}
+    if (typeof window === "undefined") return;
+    const u = new URL(window.location.href);
+    const fromUrl = u.searchParams.get("k");
+    try {
+      const stored = sessionStorage.getItem("gateKey");
+      const k = fromUrl ?? stored ?? "";
+      if (fromUrl) sessionStorage.setItem("gateKey", fromUrl);
+      // Probe the server: does it require a gate at all?
+      fetch("/api/photos")
+        .then((r) => {
+          setGated(r.status === 401);
+          setKey(k);
+        })
+        .catch(() => {
+          setGated(false);
+          setKey(k);
+        });
+    } catch {
+      setKey("");
     }
   }, []);
-  return key;
+  // If the server has no gate, "" is a valid key (no auth needed).
+  // If it does, we need a non-empty key.
+  const ready = key !== null && (!gated || key !== "");
+  return { key: key ?? "", ready };
 }
