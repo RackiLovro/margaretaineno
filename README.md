@@ -101,13 +101,23 @@ sudo apt update && sudo apt install cloudflared
 brew install cloudflared
 ```
 
-### b. Log in (need any domain on Cloudflare — free to add)
+### b. Add the domain to Cloudflare
+
+Domain: **`margaretainenozauvijek.com`**
+
+1. Sign in / create a free Cloudflare account.
+2. **Add a site** → enter `margaretainenozauvijek.com` → select the **Free** plan.
+3. Cloudflare gives you two nameservers (e.g. `aria.ns.cloudflare.com`, `bert.ns.cloudflare.com`).
+4. At your domain registrar, replace the existing nameservers with those two.
+5. Wait for Cloudflare to confirm the domain is active (minutes to a few hours). You'll get an email.
+
+Then log in to cloudflared:
 
 ```bash
 cloudflared tunnel login
 ```
 
-If you don't have a domain on Cloudflare yet: buy a cheap one (~€10/year) or use a free domain registrar and add it to Cloudflare (free plan). One‑time setup.
+A browser opens — authorize `margaretainenozauvijek.com`.
 
 ### c. Create a tunnel
 
@@ -126,7 +136,7 @@ tunnel: <TUNNEL-UUID>
 credentials-file: /home/YOU/.cloudflared/<TUNNEL-UUID>.json
 
 ingress:
-  - hostname: margareta-storage.YOURDOMAIN.com
+  - hostname: storage.margaretainenozauvijek.com
     service: http://localhost:8787
   - service: http_status:404
 ```
@@ -134,14 +144,14 @@ ingress:
 ### e. Add DNS route + run
 
 ```bash
-cloudflared tunnel route dns margareta-storage margareta-storage.YOURDOMAIN.com
+cloudflared tunnel route dns margareta-storage storage.margaretainenozauvijek.com
 cloudflared tunnel run margareta-storage
 ```
 
 Test from anywhere:
 
 ```bash
-curl https://margareta-storage.YOURDOMAIN.com/health
+curl https://storage.margaretainenozauvijek.com/health
 # {"ok":true}
 ```
 
@@ -164,7 +174,7 @@ Now the tunnel auto‑starts on boot alongside your storage server.
 npm install
 cp .env.local.example .env.local
 # edit .env.local:
-#   STORAGE_BASE_URL=https://margareta-storage.YOURDOMAIN.com
+#   STORAGE_BASE_URL=https://storage.margaretainenozauvijek.com
 #   STORAGE_SECRET=<same string as home server>
 npm run dev
 # open http://localhost:3000
@@ -185,7 +195,7 @@ Project → Settings → Environment Variables:
 
 | Key | Value |
 |-----|-------|
-| `STORAGE_BASE_URL` | `https://margareta-storage.YOURDOMAIN.com` |
+| `STORAGE_BASE_URL` | `https://storage.margaretainenozauvijek.com` |
 | `STORAGE_SECRET` | same long string as the home server |
 | `GALLERY_PASSWORD` | (optional) password; guests visit with `?k=password` |
 

@@ -175,29 +175,64 @@ export default function Page() {
 
 /* ---------- Hero ---------- */
 function Hero() {
+  // Animate each letter of "Margareta" and "Neno" with a stagger.
+  const margareta = "Margareta".split("");
+  const neno = "Neno".split("");
+  const baseDelay = 0.15;
+  const letterStep = 0.06;
+  // ampersand appears after "Margareta"
+  const ampDelay = baseDelay + margareta.length * letterStep + 0.05;
+  // "Neno" starts after ampersand
+  const nenoStart = ampDelay + 0.15;
+
   return (
     <header className="sunset-aura relative flex min-h-[88vh] flex-col items-center justify-center px-4 text-center">
       <div className="relative z-10 flex flex-col items-center">
-        <p className="mb-4 font-display text-sm uppercase tracking-[0.5em] text-gold sm:text-base">
-          Šibenik · zalazak sunca
+        <p className="mb-4 font-display text-sm uppercase tracking-[0.5em] text-gold sm:text-base animate-fadeUp" style={{ animationDelay: "0.05s" }}>
+          11.7.2026
         </p>
         <h1 className="font-display text-5xl font-semibold leading-none text-cream sm:text-7xl md:text-8xl">
-          <span className="shimmer-text">Margareta</span>
-          <span className="mx-3 text-gold/70">&amp;</span>
-          <span className="shimmer-text">Neno</span>
+          <span className="inline-flex">
+            {margareta.map((ch, i) => (
+              <span
+                key={i}
+                className="shimmer-text inline-block animate-fadeUp"
+                style={{ animationDelay: `${baseDelay + i * letterStep}s` }}
+              >
+                {ch}
+              </span>
+            ))}
+          </span>
+          <span
+            className="mx-3 inline-block text-gold/70 animate-fadeUp"
+            style={{ animationDelay: `${ampDelay}s` }}
+          >
+            &amp;
+          </span>
+          <span className="inline-flex">
+            {neno.map((ch, i) => (
+              <span
+                key={i}
+                className="shimmer-text inline-block animate-fadeUp"
+                style={{ animationDelay: `${nenoStart + i * letterStep}s` }}
+              >
+                {ch}
+              </span>
+            ))}
+          </span>
         </h1>
-        <div className="mt-6 flex items-center gap-4 text-gold">
-          <span className="h-px w-12 bg-gold/50" />
-          <span className="font-display text-xl italic">vjenčanje</span>
-          <span className="h-px w-12 bg-gold/50" />
-        </div>
-        <p className="mt-8 max-w-md font-body text-sm font-light leading-relaxed text-cream/80 sm:text-base">
-          Podijelite svoje najljepše trenutke s nama. Prenesite fotografije
-          s telefona — sve pohranjujemo u zajedničku galeriju svidanja.
+        <p
+          className="mt-8 max-w-md font-body text-sm font-light leading-relaxed text-cream/80 sm:text-base animate-fadeUp"
+          style={{ animationDelay: `${nenoStart + neno.length * letterStep + 0.2}s` }}
+        >
+          Podijelite svoje najljepše trenutke s nama.
         </p>
       </div>
 
-      <div className="absolute bottom-8 left-1/2 z-10 -translate-x-1/2 animate-pulse text-gold/70">
+      <div
+        className="absolute bottom-8 left-1/2 z-10 -translate-x-1/2 animate-pulse text-gold/70 animate-fadeUp"
+        style={{ animationDelay: `${nenoStart + neno.length * letterStep + 0.5}s` }}
+      >
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M12 5v14M5 12l7 7 7-7" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
