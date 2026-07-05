@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Margareta & Neno — Šibenik at Sunset",
   description: "Share your photos from our wedding in Šibenik.",
+  robots: { index: false, follow: false },
   openGraph: {
     title: "Margareta & Neno — Šibenik at Sunset",
     description: "Share your photos from our wedding in Šibenik.",
@@ -32,6 +33,7 @@ export default function RootLayout({
       </head>
       <body className="font-body antialiased">
         <div className="bg-sunset" aria-hidden />
+        <div className="bg-stars" aria-hidden />
         {children}
       </body>
     </html>

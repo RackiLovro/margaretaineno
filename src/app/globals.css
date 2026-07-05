@@ -66,3 +66,31 @@ body {
   break-inside: avoid;
   margin-bottom: 0.75rem;
 }
+
+/* Starry night rising from the bottom.
+   Layered radial-gradient dots, fixed across the viewport, so the
+   starfield stays consistent during scroll. Two layers + a twinkle
+   animation on a third transparent layer for life. */
+.bg-stars {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-repeat: repeat;
+  /* Stars only in the lower 60% of the page — "night rising". */
+  background-position: 0 100%;
+  background-size: 240px 240px, 180px 180px, 320px 320px;
+  background-image:
+    radial-gradient(1.2px 1.2px at 20px 30px, rgba(255, 250, 230, 0.9), transparent 60%),
+    radial-gradient(1px 1px at 130px 80px, rgba(255, 250, 230, 0.7), transparent 60%),
+    radial-gradient(1.5px 1.5px at 70px 160px, rgba(255, 250, 230, 0.8), transparent 60%);
+  /* Mask so stars fade in from the bottom and never reach the top. */
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, transparent 30%, rgba(0,0,0,0.4) 55%, rgba(0,0,0,0.85) 100%);
+  mask-image: linear-gradient(180deg, transparent 0%, transparent 30%, rgba(0,0,0,0.4) 55%, rgba(0,0,0,0.85) 100%);
+  animation: twinkle 6s ease-in-out infinite;
+}
+
+@keyframes twinkle {
+  0%, 100% { opacity: 0.75; }
+  50%      { opacity: 1; }
+}
