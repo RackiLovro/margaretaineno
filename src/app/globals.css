@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-cormorant: "Cormorant Garamond", Georgia, serif;
+  --font-inter: "Inter", system-ui, sans-serif;
+}
+
+html,
+body {
+  background: linear-gradient(180deg, #2a0e1f 0%, #4a1226 35%, #7a1f2b 70%, #c2410c 100%);
+  background-attachment: fixed;
+  min-height: 100vh;
+  color: #fdf6ec;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* sunset glow behind hero */
+.sunset-aura::before {
+  content: "";
+  position: absolute;
+  inset: -10% -10% 30% -10%;
+  background: radial-gradient(
+    ellipse at 50% 75%,
+    rgba(251, 146, 60, 0.45) 0%,
+    rgba(251, 146, 60, 0.15) 30%,
+    transparent 60%
+  );
+  filter: blur(40px);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.shimmer-text {
+  background: linear-gradient(
+    90deg,
+    #fdf6ec 20%,
+    #c9a14a 40%,
+    #fdf6ec 60%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 3s linear infinite;
+}
+
+/* masonry-ish columns */
+.masonry {
+  column-gap: 0.75rem;
+}
+.masonry > * {
+  break-inside: avoid;
+  margin-bottom: 0.75rem;
+}
