@@ -24,7 +24,7 @@ body {
   position: fixed;
   inset: 0;
   z-index: -1;
-  background: linear-gradient(180deg, #2a0e1f 0%, #3a1141 35%, #4a1d4f 70%, #7e22ce 100%);
+  background: linear-gradient(180deg, #2a0e1f 0%, #4a1226 35%, #7a1f2b 70%, #c2410c 100%);
   background-size: cover;
 }
 
@@ -35,8 +35,8 @@ body {
   inset: -10% -10% 30% -10%;
   background: radial-gradient(
     ellipse at 50% 75%,
-    rgba(168, 85, 247, 0.45) 0%,
-    rgba(168, 85, 247, 0.15) 30%,
+    rgba(251, 146, 60, 0.45) 0%,
+    rgba(251, 146, 60, 0.15) 30%,
     transparent 60%
   );
   filter: blur(40px);

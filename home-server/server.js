@@ -22,6 +22,7 @@ const META_FILE = path.join(__dirname, "photos.json");
 
 const SECRET = process.env.STORAGE_SECRET || "change-me-please";
 const PORT = Number(process.env.PORT || 8787);
+const BIND_ADDR = process.env.BIND_ADDR || "127.0.0.1";
 const MAX_BYTES = 60 * 1024 * 1024; // generous; client compresses to ~1-2 MB
 
 const ALLOWED_MIME = [
@@ -179,7 +180,7 @@ app.get("/photo/:id", requireSecret, async (req, res) => {
 // --- Health (no auth, for tunnel checks) ---
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-app.listen(PORT, () => {
-  console.log(`Margareta storage server listening on http://0.0.0.0:${PORT}`);
+app.listen(PORT, BIND_ADDR, () => {
+  console.log(`Margareta storage server listening on http://${BIND_ADDR}:${PORT}`);
   console.log(`Photos dir: ${PHOTOS_DIR}`);
 });
