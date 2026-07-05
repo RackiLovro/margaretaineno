@@ -161,7 +161,7 @@ export default function Page() {
       <section className="relative z-10 mx-auto mt-12 max-w-6xl px-4 pb-24">
         <SectionHeading
           title="Galerija"
-          subtitle="Slike koje su podijelili vaši gosti"
+          subtitle="Slike koje su podijelili drugi gosti"
         />
 
         {error && (
