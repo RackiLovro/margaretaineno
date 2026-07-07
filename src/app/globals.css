@@ -8,7 +8,7 @@
 }
 
 html {
-  background-color: #c2410c;
+  background-color: #2a0e1f;
   min-height: 100%;
 }
 
@@ -17,10 +17,14 @@ body {
   color: #fdf6ec;
   -webkit-font-smoothing: antialiased;
   position: relative;
-  /* Gradient stretches to full page height (not just viewport). */
+  /* Gradient: dark wine at top → orange sunset at bottom.
+     Stretches to full page height (scrolls with content). */
   background: linear-gradient(180deg, #2a0e1f 0%, #4a1226 35%, #7a1f2b 70%, #c2410c 100%);
   background-size: 100% 100%;
   background-attachment: scroll;
+  /* Create stacking context so stars (z-index:-1) show behind content
+     but above the body background. */
+  z-index: 0;
 }
 
 /* sunset glow behind hero */
