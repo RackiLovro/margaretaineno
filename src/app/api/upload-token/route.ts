@@ -44,7 +44,13 @@ export async function POST(req: Request) {
   const putUrl = await getSignedUrl(
     r2,
     new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, ContentType: "image/jpeg" }),
-    { expiresIn: 300 }
+    {
+      expiresIn: 300,
+      // Disable checksum — AWS SDK v3.620+ adds x-amz-checksum-crc32 to
+      // presigned URLs by default, which R2 rejects on PUT with a real body.
+      signableHeaders: new Set(["host", "content-type"]),
+      unsignableHeaders: new Set(["x-amz-checksum-crc32", "x-amz-sdk-checksum-algorithm"]),
+    }
   );
   return NextResponse.json({
     mode: "r2" as const,
