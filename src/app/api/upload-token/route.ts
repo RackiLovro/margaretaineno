@@ -41,15 +41,16 @@ export async function POST(req: Request) {
   const exp = Date.now() + 5 * 60 * 1000;
   const r2 = getR2();
   const key = `photos/${id}__upload.jpg`;
+  // Don't set ContentType in the PutObjectCommand — the browser will
+  // set its own Content-Type on the PUT. If we sign for image/jpeg but
+  // the phone sends image/heic, R2 rejects the signature.
   const putUrl = await getSignedUrl(
     r2,
-    new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, ContentType: "image/jpeg" }),
+    new PutObjectCommand({ Bucket: R2_BUCKET, Key: key }),
     {
       expiresIn: 300,
-      // Disable checksum — AWS SDK v3.620+ adds x-amz-checksum-crc32 to
-      // presigned URLs by default, which R2 rejects on PUT with a real body.
-      signableHeaders: new Set(["host", "content-type"]),
-      unsignableHeaders: new Set(["x-amz-checksum-crc32", "x-amz-sdk-checksum-algorithm"]),
+      signableHeaders: new Set(["host"]),
+      unsignableHeaders: new Set(["content-type", "x-amz-checksum-crc32", "x-amz-sdk-checksum-algorithm"]),
     }
   );
   return NextResponse.json({

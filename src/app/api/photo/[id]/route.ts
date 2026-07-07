@@ -48,16 +48,24 @@ export async function GET(
     const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
     const { getR2, R2_BUCKET } = await import("@/lib/r2");
     const r2 = getR2();
+    // For thumbnails, try thumbs/ first; if not found, serve the original.
     const prefix = thumb ? `thumbs/${params.id}` : `photos/${params.id}`;
-    const res = await r2.send(
+    let res = await r2.send(
       new ListObjectsV2Command({ Bucket: R2_BUCKET, Prefix: prefix, MaxKeys: 1 })
     );
-    const obj = res.Contents?.[0];
+    let obj = res.Contents?.[0];
+    // No thumbnail in R2 → serve the original photo instead.
+    if (!obj?.Key && thumb) {
+      const fallbackRes = await r2.send(
+        new ListObjectsV2Command({ Bucket: R2_BUCKET, Prefix: `photos/${params.id}`, MaxKeys: 1 })
+      );
+      obj = fallbackRes.Contents?.[0];
+    }
     if (!obj?.Key) return new Response("Not found in R2", { status: 404 });
     const { buffer, contentType } = await getR2Object(obj.Key);
     return new Response(new Uint8Array(buffer), {
       headers: {
-        "Content-Type": thumb ? "image/webp" : contentType,
+        "Content-Type": contentType,
         "Cache-Control": "public, max-age=86400, immutable",
       },
     });

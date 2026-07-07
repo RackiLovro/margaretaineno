@@ -127,8 +127,8 @@ export default function Page() {
           }
 
           if (!r.ok) {
-            const j = await r.json().catch(() => ({}));
-            throw new Error(j.error || `Upload failed (${r.status})`);
+            const text = await r.text().catch(() => "");
+            throw new Error(text.slice(0, 150) || `Upload failed (${r.status})`);
           }
           ok++;
         } catch (e) {
