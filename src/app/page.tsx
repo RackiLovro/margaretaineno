@@ -69,25 +69,45 @@ export default function Page() {
       let ok = 0;
       let failed = 0;
 
-      // Serial uploads: Vercel Hobby caps serverless duration at ~10s.
-      // Parallel requests multiply the chance of hitting that cap.
-      // One at a time + retry keeps each request well under the limit.
+      // Get a short-lived token + storage URL from Vercel (cookie-gated).
+      // Then POST raw files directly to the storage server, bypassing
+      // Vercel's serverless body/timeout limits. Full quality originals.
+      let tokenInfo: { url: string; token: string; exp: number } | null = null;
+      try {
+        const tr = await fetch("/api/upload-token", { method: "POST" });
+        if (!tr.ok) throw new Error("Cannot get upload token");
+        tokenInfo = await tr.json();
+      } catch (e) {
+        setError((e as Error).message);
+        setUploading(false);
+        return;
+      }
+
       for (let idx = 0; idx < arr.length; idx++) {
         const file = arr[idx];
         try {
-          setProgress(`Priprema ${idx + 1}/${arr.length}: ${file.name}`);
-          const prepared = await compressImage(file);
           setProgress(`Slanje ${idx + 1}/${arr.length}: ${file.name}`);
-          const fd = new FormData();
-          fd.append("file", prepared.file, prepared.name);
-          // Retry once on 5xx (Vercel can transiently 502/504).
-          let r = await fetch("/api/upload", { method: "POST", body: fd });
-          if (r.status >= 500) {
-            await new Promise((res) => setTimeout(res, 1500));
-            const fd2 = new FormData();
-            const prepared2 = await compressImage(file);
-            fd2.append("file", prepared2.file, prepared2.name);
-            r = await fetch("/api/upload", { method: "POST", body: fd2 });
+          const url = `${tokenInfo!.url}/upload-direct?name=${encodeURIComponent(file.name)}&type=${encodeURIComponent(file.type || "image/jpeg")}`;
+          let r = await fetch(url, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${tokenInfo!.token}`,
+              "Content-Type": file.type || "application/octet-stream",
+            },
+            body: file,
+          });
+          // Refresh token if expired mid-batch.
+          if (r.status === 401 && Date.now() > tokenInfo!.exp) {
+            const tr2 = await fetch("/api/upload-token", { method: "POST" });
+            if (tr2.ok) tokenInfo = await tr2.json();
+            r = await fetch(url, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${tokenInfo!.token}`,
+                "Content-Type": file.type || "application/octet-stream",
+              },
+              body: file,
+            });
           }
           if (!r.ok) {
             const j = await r.json().catch(() => ({}));
@@ -461,56 +481,4 @@ function Footer() {
       </p>
     </footer>
   );
-}
-
-/* ---------- Helper: compress/resize image in-browser before upload ---------- */
-// Avoids Vercel's 4.5 MB serverless body limit and speeds up uploads
-// from phones. Resizes to max 2048px on the long edge, re-encodes as
-// JPEG @ 0.85 quality. HEIC files are decoded by the browser's canvas
-// (Safari supports it; Chrome/Firefox may fall through to the raw file
-// if they can't decode — the server still accepts those).
-const MAX_DIM = 1280;
-const JPEG_QUALITY = 0.72;
-
-async function compressImage(file: File): Promise<{ file: Blob; name: string }> {
-  const baseName = file.name.replace(/\.[^.]+$/, "");
-  // If it's already small enough and a web-friendly format, send as-is.
-  const webFriendly = /\.(jpe?g|png|webp)$/i.test(file.name);
-  if (webFriendly && file.size <= 2_500_000) {
-    return { file, name: file.name };
-  }
-  try {
-    const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, MAX_DIM / Math.max(bitmap.width, bitmap.height));
-    const w = Math.round(bitmap.width * scale);
-    const h = Math.round(bitmap.height * scale);
-    const canvas =
-      typeof OffscreenCanvas !== "undefined"
-        ? new OffscreenCanvas(w, h)
-        : Object.assign(document.createElement("canvas"), {
-            width: w,
-            height: h,
-          });
-    const ctx = (canvas as HTMLCanvasElement | OffscreenCanvas).getContext(
-      "2d"
-    ) as CanvasRenderingContext2D;
-    ctx.drawImage(bitmap, 0, 0, w, h);
-    const blob: Blob = (canvas as OffscreenCanvas).convertToBlob
-      ? await (canvas as OffscreenCanvas).convertToBlob({
-          type: "image/jpeg",
-          quality: JPEG_QUALITY,
-        })
-      : await new Promise<Blob>((resolve) =>
-          (canvas as HTMLCanvasElement).toBlob(
-            (b) => resolve(b!),
-            "image/jpeg",
-            JPEG_QUALITY
-          )
-        );
-    bitmap.close?.();
-    return { file: blob, name: `${baseName}.jpg` };
-  } catch {
-    // Couldn't decode (e.g. HEIC on non-Safari). Send original; server handles it.
-    return { file, name: file.name };
-  }
 }

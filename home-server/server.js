@@ -40,13 +40,48 @@ await fs.mkdir(THUMBS_DIR, { recursive: true });
 const app = express();
 app.disable("x-powered-by");
 
+// --- CORS for direct uploads from the Vercel app ---
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && (origin.includes("vercel.app") || origin.includes("margaretaineno"))) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-gallery-secret");
+  }
+  if (req.method === "OPTIONS") return res.status(204).end();
+  next();
+});
+
 // Raw body for /photo/:id (handled manually below).
 app.use("/photos", express.json());
 
-// --- Auth middleware ---
+// --- Auth middleware: shared secret header ---
 function requireSecret(req, res, next) {
   if (req.headers["x-gallery-secret"] === SECRET) return next();
   return res.status(401).json({ error: "Unauthorized" });
+}
+
+// --- Token verification for direct uploads ---
+function verifyDirectToken(req, res, next) {
+  const auth = req.headers.authorization ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!token) return res.status(401).json({ error: "No token" });
+  const [expStr, sig] = token.split(".");
+  const exp = Number(expStr);
+  if (!exp || !sig || Date.now() > exp) {
+    return res.status(401).json({ error: "Token expired" });
+  }
+  let h1 = 0x811c9dc5;
+  let h2 = 0x1000193;
+  const s = SECRET + "|" + exp;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ c, 0x01000193) >>> 0;
+  }
+  const expected = h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0");
+  if (sig !== expected) return res.status(401).json({ error: "Bad token" });
+  next();
 }
 
 // --- Metadata helpers ---
@@ -73,7 +108,51 @@ async function writeMeta(meta) {
   await fs.writeFile(META_FILE, JSON.stringify(meta, null, 2));
 }
 
-// --- Upload ---
+// --- Upload core logic (shared by /upload and /upload-direct) ---
+async function storePhoto(buffer, originalName, mimeType) {
+  const id = crypto.randomBytes(9).toString("base64url");
+  const safeExt = path.extname(originalName).toLowerCase() || ".jpg";
+  const safeBase = path.basename(originalName, safeExt).replace(/[^\w.\-]/g, "_").slice(0, 60);
+  const storedName = `${id}__${safeBase}${safeExt}`;
+  const thumbName = `${id}.webp`;
+
+  await fs.writeFile(path.join(PHOTOS_DIR, storedName), buffer);
+
+  // Thumbnail (max 600px wide, webp). Fallback to original on failure.
+  try {
+    await sharp(buffer, { failOn: "none" })
+      .rotate()
+      .resize({ width: 600, withoutEnlargement: true })
+      .webp({ quality: 75 })
+      .toFile(path.join(THUMBS_DIR, thumbName));
+  } catch (e) {
+    console.warn("Thumbnail failed, using original:", e.message);
+    await fs.writeFile(path.join(THUMBS_DIR, thumbName), buffer);
+  }
+
+  const meta = await readMeta();
+  const entry = {
+    id,
+    name: originalName,
+    storedName,
+    thumbName,
+    size: buffer.length,
+    mimeType: mimeType || "image/jpeg",
+    createdTime: new Date().toISOString(),
+  };
+  meta.photos.unshift(entry);
+  await writeMeta(meta);
+
+  return {
+    id,
+    name: originalName,
+    createdTime: entry.createdTime,
+    size: String(buffer.length),
+    mimeType: entry.mimeType,
+  };
+}
+
+// --- Upload via multipart (used by Vercel proxy /api/upload) ---
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_BYTES },
@@ -81,51 +160,34 @@ const upload = multer({
 
 app.post("/upload", requireSecret, upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file provided" });
-
-  const id = crypto.randomBytes(9).toString("base64url");
-  const originalName = req.file.originalname || "photo";
-  const safeExt = path.extname(originalName).toLowerCase() || ".jpg";
-  const safeBase = path.basename(originalName, safeExt).replace(/[^\w.\-]/g, "_").slice(0, 60);
-  const storedName = `${id}__${safeBase}${safeExt}`;
-  const thumbName = `${id}.webp`;
-
   try {
-    await fs.writeFile(path.join(PHOTOS_DIR, storedName), req.file.buffer);
-
-    // Generate a thumbnail (max 600px wide, webp). Fallback to original on failure.
-    try {
-      await sharp(req.file.buffer, { failOn: "none" })
-        .rotate()
-        .resize({ width: 600, withoutEnlargement: true })
-        .webp({ quality: 75 })
-        .toFile(path.join(THUMBS_DIR, thumbName));
-    } catch (e) {
-      console.warn("Thumbnail failed, using original:", e.message);
-      await fs.writeFile(path.join(THUMBS_DIR, thumbName), req.file.buffer);
-    }
-
-    const meta = await readMeta();
-    const entry = {
-      id,
-      name: originalName,
-      storedName,
-      thumbName,
-      size: req.file.size,
-      mimeType: req.file.mimetype || "image/jpeg",
-      createdTime: new Date().toISOString(),
-    };
-    meta.photos.unshift(entry);
-    await writeMeta(meta);
-
-    res.json({
-      id,
-      name: originalName,
-      createdTime: entry.createdTime,
-      size: String(req.file.size),
-      mimeType: entry.mimeType,
-    });
+    const result = await storePhoto(
+      req.file.buffer,
+      req.file.originalname || "photo",
+      req.file.mimetype
+    );
+    res.json(result);
   } catch (err) {
     console.error("Upload error:", err);
+    res.status(500).json({ error: "Failed to store photo" });
+  }
+});
+
+// --- Direct upload from browser (bypasses Vercel, full quality originals) ---
+// Client gets a short-lived token from Vercel /api/upload-token, then
+// POSTs the raw file here with Authorization: Bearer <token>.
+app.post("/upload-direct", verifyDirectToken, express.raw({ type: "*/*", limit: MAX_BYTES }), async (req, res) => {
+  if (!req.body || req.body.length === 0) {
+    return res.status(400).json({ error: "Empty body" });
+  }
+  // Original filename + mime come from query params (set by client).
+  const originalName = (req.query.name) || "photo";
+  const mimeType = (req.query.type) || "image/jpeg";
+  try {
+    const result = await storePhoto(Buffer.from(req.body), originalName, mimeType);
+    res.json(result);
+  } catch (err) {
+    console.error("Direct upload error:", err);
     res.status(500).json({ error: "Failed to store photo" });
   }
 });
