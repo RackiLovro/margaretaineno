@@ -35,6 +35,21 @@ export function authHeaders(extra?: HeadersInit) {
 export const MAX_BYTES = 25 * 1024 * 1024;
 
 /**
+ * Probe whether the home storage server is reachable (500ms timeout).
+ */
+export async function isStorageUp(): Promise<boolean> {
+  if (!STORAGE_BASE) return false;
+  try {
+    const r = await fetch(`${STORAGE_BASE.replace(/\/$/, "")}/health`, {
+      signal: AbortSignal.timeout(500),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Legacy/fallback gate. Middleware is the primary gate via cookie.
  * This still accepts `?k=<GALLERY_PASSWORD>` for non-browser clients
  * (curl, scripts) and checks the signed cookie as a defence in depth.

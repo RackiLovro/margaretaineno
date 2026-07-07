@@ -14,7 +14,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PHOTOS_DIR = path.join(__dirname, "photos");
@@ -26,7 +26,7 @@ const PORT = Number(process.env.PORT || 8787);
 const BIND_ADDR = process.env.BIND_ADDR || "127.0.0.1";
 const MAX_BYTES = 60 * 1024 * 1024; // generous; client compresses to ~1-2 MB
 
-// --- R2 backup config (optional — if creds absent, R2 is skipped) ---
+// --- R2 config (for reconciliation: pull R2 objects back to disk on boot) ---
 const R2_ACCESS_KEY = process.env.R2_ACCESS_KEY || "";
 const R2_SECRET_KEY = process.env.R2_SECRET_KEY || "";
 const R2_ENDPOINT = process.env.R2_ENDPOINT || "";
@@ -39,26 +39,75 @@ if (R2_ACCESS_KEY && R2_SECRET_KEY && R2_ENDPOINT) {
     endpoint: R2_ENDPOINT,
     credentials: { accessKeyId: R2_ACCESS_KEY, secretAccessKey: R2_SECRET_KEY },
   });
-  console.log("R2 backup enabled:", R2_BUCKET, "@", R2_ENDPOINT);
+  console.log("R2 reconciliation enabled:", R2_BUCKET);
 } else {
-  console.log("R2 backup disabled (no creds)");
+  console.log("R2 reconciliation disabled (no creds)");
 }
 
-async function uploadToR2(key, buffer, contentType) {
+// On boot: pull any objects in R2 that are missing from disk (e.g. photos
+// uploaded while the workstation was down). Non-blocking, runs in bg.
+async function reconcileFromR2() {
   if (!r2) return;
   try {
-    await r2.send(
-      new PutObjectCommand({
+    let token;
+    do {
+      const res = await r2.send(new ListObjectsV2Command({
         Bucket: R2_BUCKET,
-        Key: key,
-        Body: buffer,
-        ContentType: contentType,
-      })
-    );
+        ContinuationToken: token,
+        MaxKeys: 500,
+      }));
+      for (const obj of res.Contents || []) {
+        const key = obj.Key;
+        if (key.startsWith("photos/")) {
+          const filename = key.slice("photos/".length);
+          const localPath = path.join(PHOTOS_DIR, filename);
+          try {
+            await fs.access(localPath);
+          } catch {
+            // Missing locally — pull from R2.
+            console.log("Reconciling from R2:", filename);
+            const getRes = await r2.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+            const buf = Buffer.from(await getRes.Body.transformToByteArray());
+            await fs.writeFile(localPath, buf);
+            // Also pull thumbnail if it exists.
+            const thumbKey = "thumbs/" + filename.replace(/\.[^.]+$/, "") + ".webp";
+            // Reconstruct metadata entry.
+            const id = filename.split("__")[0];
+            const meta = await readMeta();
+            if (!meta.photos.find(p => p.id === id)) {
+              meta.photos.unshift({
+                id,
+                name: filename.split("__").slice(1).join("__") || filename,
+                storedName: filename,
+                thumbName: id + ".webp",
+                size: String(buf.length),
+                mimeType: "image/jpeg",
+                createdTime: obj.LastModified ? obj.LastModified.toISOString() : new Date().toISOString(),
+              });
+              await writeMeta(meta);
+            }
+          }
+        } else if (key.startsWith("thumbs/")) {
+          const filename = key.slice("thumbs/".length);
+          const localPath = path.join(THUMBS_DIR, filename);
+          try {
+            await fs.access(localPath);
+          } catch {
+            const getRes = await r2.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+            const buf = Buffer.from(await getRes.Body.transformToByteArray());
+            await fs.writeFile(localPath, buf);
+          }
+        }
+      }
+      token = res.IsTruncated ? res.NextContinuationToken : null;
+    } while (token);
+    console.log("R2 reconciliation complete");
   } catch (e) {
-    console.warn("R2 upload failed (non-fatal):", e.message);
+    console.warn("R2 reconciliation failed (non-fatal):", e.message);
   }
 }
+// Run reconciliation 5 seconds after boot (non-blocking).
+setTimeout(reconcileFromR2, 5000);
 
 const ALLOWED_MIME = [
   "image/jpeg",
@@ -153,11 +202,7 @@ async function storePhoto(buffer, originalName, mimeType) {
 
   await fs.writeFile(path.join(PHOTOS_DIR, storedName), buffer);
 
-  // Upload original to R2 (fire-and-forget, non-fatal if it fails).
-  uploadToR2(`photos/${storedName}`, buffer, mimeType || "image/jpeg");
-
   // Thumbnail (max 600px wide, webp). Fallback to original on failure.
-  let thumbBuffer = null;
   try {
     thumbBuffer = await sharp(buffer, { failOn: "none" })
       .rotate()
@@ -170,9 +215,6 @@ async function storePhoto(buffer, originalName, mimeType) {
     thumbBuffer = buffer;
     await fs.writeFile(path.join(THUMBS_DIR, thumbName), buffer);
   }
-
-  // Upload thumbnail to R2 too (so fallback can serve thumbs).
-  if (thumbBuffer) uploadToR2(`thumbs/${thumbName}`, thumbBuffer, "image/webp");
 
   const meta = await readMeta();
   const entry = {

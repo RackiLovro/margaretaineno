@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { storageConfigured, storageUrl, authHeaders, checkGate } from "@/lib/storage";
+import { storageConfigured, storageUrl, authHeaders, checkGate, isStorageUp } from "@/lib/storage";
+import { listR2Photos, r2Configured } from "@/lib/r2";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,33 +9,33 @@ export async function GET(req: Request) {
   if (!checkGate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!storageConfigured()) {
+
+  // Try workstation first.
+  if (storageConfigured() && (await isStorageUp())) {
+    try {
+      const r = await fetch(storageUrl("/photos"), {
+        headers: authHeaders(),
+        cache: "no-store",
+      });
+      if (r.ok) {
+        const data = await r.json();
+        return NextResponse.json(data);
+      }
+    } catch {}
+  }
+
+  // Workstation down or failed: list from R2.
+  if (!r2Configured()) {
     return NextResponse.json(
       { error: "Storage not configured (set STORAGE_BASE_URL + STORAGE_SECRET)" },
       { status: 500 }
     );
   }
-
-  const url = new URL(req.url);
-  const pageToken = url.searchParams.get("pageToken") ?? undefined;
-  const pageSize = url.searchParams.get("pageSize") ?? undefined;
-
-  const qs = new URLSearchParams();
-  if (pageToken) qs.set("pageToken", pageToken);
-  if (pageSize) qs.set("pageSize", pageSize);
-
   try {
-    const r = await fetch(storageUrl(`/photos?${qs.toString()}`), {
-      headers: authHeaders(),
-      cache: "no-store",
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      return NextResponse.json(data, { status: r.status });
-    }
-    return NextResponse.json(data);
+    const photos = await listR2Photos();
+    return NextResponse.json(photos);
   } catch (err) {
-    console.error("Storage list proxy error:", err);
-    return NextResponse.json({ error: "Storage server unreachable" }, { status: 502 });
+    console.error("R2 list error:", err);
+    return NextResponse.json({ error: "Failed to list photos" }, { status: 502 });
   }
 }

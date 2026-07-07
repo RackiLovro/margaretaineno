@@ -1,37 +1,70 @@
 import { NextResponse } from "next/server";
-import { checkGate } from "@/lib/storage";
+import { checkGate, storageUrl, isStorageUp } from "@/lib/storage";
+import { getR2, R2_BUCKET, r2Configured } from "@/lib/r2";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Returns a short-lived signed token + the storage URL so the client
- * can upload the raw original directly to the home storage server,
- * bypassing Vercel's serverless body/timeout limits entirely.
- *
- * Cookie-gated by middleware (no anonymous access).
+ * Returns upload instructions for the client.
+ * 1. Probes the home storage server. If UP → direct upload (token + URL).
+ *  2. If DOWN → presigned R2 PUT URL (client uploads directly to R2).
  */
 export async function POST(req: Request) {
   if (!checkGate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const base = process.env.STORAGE_BASE_URL;
-  const secret = process.env.STORAGE_SECRET;
-  if (!base || !secret) {
-    return NextResponse.json({ error: "Storage not configured" }, { status: 500 });
+
+  const storageUp = await isStorageUp();
+
+  if (storageUp) {
+    // Workstation is up: direct upload via tunnel.
+    const base = process.env.STORAGE_BASE_URL!;
+    const secret = process.env.STORAGE_SECRET!;
+    const exp = Date.now() + 2 * 60 * 1000;
+    const token = signToken(secret, exp);
+    return NextResponse.json({
+      mode: "direct" as const,
+      url: base.replace(/\/$/, ""),
+      token,
+      exp,
+    });
   }
-  const exp = Date.now() + 2 * 60 * 1000; // 2 minutes
-  const token = signToken(secret, exp);
-  return NextResponse.json({ url: base.replace(/\/$/, ""), token, exp });
+
+  // Workstation is down: upload to R2 instead.
+  if (!r2Configured()) {
+    return NextResponse.json({ error: "Storage unavailable" }, { status: 503 });
+  }
+  const id = cryptoRandomId();
+  const exp = Date.now() + 5 * 60 * 1000;
+  const r2 = getR2();
+  const key = `photos/${id}__upload.jpg`;
+  const putUrl = await getSignedUrl(
+    r2,
+    new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, ContentType: "image/jpeg" }),
+    { expiresIn: 300 }
+  );
+  return NextResponse.json({
+    mode: "r2" as const,
+    putUrl,
+    key,
+    id,
+    exp,
+  });
+}
+
+function cryptoRandomId() {
+  const bytes = new Uint8Array(9);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function signToken(secret: string, exp: number): string {
-  // HMAC-SHA256 via Web Crypto (available in Node 22 + Edge).
-  // We sign "exp" with the secret so the storage server can verify.
-  const key = secret + "|" + exp;
   let h1 = 0x811c9dc5;
   let h2 = 0x1000193;
-  const s = key;
+  const s = secret + "|" + exp;
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
     h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;

@@ -69,14 +69,13 @@ export default function Page() {
       let ok = 0;
       let failed = 0;
 
-      // Get a short-lived token + storage URL from Vercel (cookie-gated).
-      // Then POST raw files directly to the storage server, bypassing
-      // Vercel's serverless body/timeout limits. Full quality originals.
-      let tokenInfo: { url: string; token: string; exp: number } | null = null;
+      // Get upload instructions from Vercel (cookie-gated).
+      // Returns either { mode: "direct", url, token } or { mode: "r2", putUrl, key }.
+      let uploadInfo: any = null;
       try {
         const tr = await fetch("/api/upload-token", { method: "POST" });
         if (!tr.ok) throw new Error("Cannot get upload token");
-        tokenInfo = await tr.json();
+        uploadInfo = await tr.json();
       } catch (e) {
         setError((e as Error).message);
         setUploading(false);
@@ -87,28 +86,44 @@ export default function Page() {
         const file = arr[idx];
         try {
           setProgress(`Slanje ${idx + 1}/${arr.length}: ${file.name}`);
-          const url = `${tokenInfo!.url}/upload-direct?name=${encodeURIComponent(file.name)}&type=${encodeURIComponent(file.type || "image/jpeg")}`;
-          let r = await fetch(url, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${tokenInfo!.token}`,
-              "Content-Type": file.type || "application/octet-stream",
-            },
-            body: file,
-          });
-          // Refresh token if expired mid-batch.
-          if (r.status === 401 && Date.now() > tokenInfo!.exp) {
-            const tr2 = await fetch("/api/upload-token", { method: "POST" });
-            if (tr2.ok) tokenInfo = await tr2.json();
+          let r: Response;
+
+          if (uploadInfo.mode === "r2") {
+            // Workstation down — upload directly to R2 via presigned URL.
+            r = await fetch(uploadInfo.putUrl, {
+              method: "PUT",
+              headers: { "Content-Type": file.type || "image/jpeg" },
+              body: file,
+            });
+          } else {
+            // Workstation up — direct upload via tunnel.
+            const url = `${uploadInfo.url}/upload-direct?name=${encodeURIComponent(file.name)}&type=${encodeURIComponent(file.type || "image/jpeg")}`;
             r = await fetch(url, {
               method: "POST",
               headers: {
-                Authorization: `Bearer ${tokenInfo!.token}`,
+                Authorization: `Bearer ${uploadInfo.token}`,
                 "Content-Type": file.type || "application/octet-stream",
               },
               body: file,
             });
+            // Refresh token if expired mid-batch.
+            if (r.status === 401 && Date.now() > uploadInfo.exp) {
+              const tr2 = await fetch("/api/upload-token", { method: "POST" });
+              if (tr2.ok) uploadInfo = await tr2.json();
+              if (uploadInfo.mode === "direct") {
+                const url2 = `${uploadInfo.url}/upload-direct?name=${encodeURIComponent(file.name)}&type=${encodeURIComponent(file.type || "image/jpeg")}`;
+                r = await fetch(url2, {
+                  method: "POST",
+                  headers: {
+                    Authorization: `Bearer ${uploadInfo.token}`,
+                    "Content-Type": file.type || "application/octet-stream",
+                  },
+                  body: file,
+                });
+              }
+            }
           }
+
           if (!r.ok) {
             const j = await r.json().catch(() => ({}));
             throw new Error(j.error || `Upload failed (${r.status})`);
