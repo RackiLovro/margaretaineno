@@ -203,6 +203,7 @@ async function storePhoto(buffer, originalName, mimeType) {
   await fs.writeFile(path.join(PHOTOS_DIR, storedName), buffer);
 
   // Thumbnail (max 600px wide, webp). Fallback to original on failure.
+  let thumbBuffer;
   try {
     thumbBuffer = await sharp(buffer, { failOn: "none" })
       .rotate()
@@ -262,15 +263,21 @@ app.post("/upload", requireSecret, upload.single("file"), async (req, res) => {
 // --- Direct upload from browser (bypasses Vercel, full quality originals) ---
 // Client gets a short-lived token from Vercel /api/upload-token, then
 // POSTs the raw file here with Authorization: Bearer <token>.
-app.post("/upload-direct", verifyDirectToken, express.raw({ type: "*/*", limit: MAX_BYTES }), async (req, res) => {
-  if (!req.body || req.body.length === 0) {
+// Uses multer (same as /upload) instead of express.raw for reliability.
+const directUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_BYTES },
+});
+
+app.post("/upload-direct", verifyDirectToken, directUpload.single("file"), async (req, res) => {
+  const body = req.file ? req.file.buffer : req.body;
+  if (!body || (Buffer.isBuffer(body) ? body.length === 0 : true)) {
     return res.status(400).json({ error: "Empty body" });
   }
-  // Original filename + mime come from query params (set by client).
-  const originalName = (req.query.name) || "photo";
-  const mimeType = (req.query.type) || "image/jpeg";
+  const originalName = (req.query.name) || (req.file ? req.file.originalname : "") || "photo";
+  const mimeType = (req.query.type) || (req.file ? req.file.mimetype : "") || "image/jpeg";
   try {
-    const result = await storePhoto(Buffer.from(req.body), originalName, mimeType);
+    const result = await storePhoto(Buffer.from(body), originalName, mimeType);
     res.json(result);
   } catch (err) {
     console.error("Direct upload error:", err);

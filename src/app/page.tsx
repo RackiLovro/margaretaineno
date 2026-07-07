@@ -96,15 +96,16 @@ export default function Page() {
               body: file,
             });
           } else {
-            // Workstation up — direct upload via tunnel.
+            // Workstation up — direct upload via tunnel (multipart form).
             const url = `${uploadInfo.url}/upload-direct?name=${encodeURIComponent(file.name)}&type=${encodeURIComponent(file.type || "image/jpeg")}`;
+            const fd = new FormData();
+            fd.append("file", file, file.name);
             r = await fetch(url, {
               method: "POST",
               headers: {
                 Authorization: `Bearer ${uploadInfo.token}`,
-                "Content-Type": file.type || "application/octet-stream",
               },
-              body: file,
+              body: fd,
             });
             // Refresh token if expired mid-batch.
             if (r.status === 401 && Date.now() > uploadInfo.exp) {
@@ -112,13 +113,14 @@ export default function Page() {
               if (tr2.ok) uploadInfo = await tr2.json();
               if (uploadInfo.mode === "direct") {
                 const url2 = `${uploadInfo.url}/upload-direct?name=${encodeURIComponent(file.name)}&type=${encodeURIComponent(file.type || "image/jpeg")}`;
+                const fd2 = new FormData();
+                fd2.append("file", file, file.name);
                 r = await fetch(url2, {
                   method: "POST",
                   headers: {
                     Authorization: `Bearer ${uploadInfo.token}`,
-                    "Content-Type": file.type || "application/octet-stream",
                   },
-                  body: file,
+                  body: fd2,
                 });
               }
             }
