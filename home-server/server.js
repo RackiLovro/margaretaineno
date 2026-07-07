@@ -14,6 +14,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PHOTOS_DIR = path.join(__dirname, "photos");
@@ -24,6 +25,40 @@ const SECRET = process.env.STORAGE_SECRET || "change-me-please";
 const PORT = Number(process.env.PORT || 8787);
 const BIND_ADDR = process.env.BIND_ADDR || "127.0.0.1";
 const MAX_BYTES = 60 * 1024 * 1024; // generous; client compresses to ~1-2 MB
+
+// --- R2 backup config (optional — if creds absent, R2 is skipped) ---
+const R2_ACCESS_KEY = process.env.R2_ACCESS_KEY || "";
+const R2_SECRET_KEY = process.env.R2_SECRET_KEY || "";
+const R2_ENDPOINT = process.env.R2_ENDPOINT || "";
+const R2_BUCKET = process.env.R2_BUCKET || "margareta-backup";
+
+let r2 = null;
+if (R2_ACCESS_KEY && R2_SECRET_KEY && R2_ENDPOINT) {
+  r2 = new S3Client({
+    region: "auto",
+    endpoint: R2_ENDPOINT,
+    credentials: { accessKeyId: R2_ACCESS_KEY, secretAccessKey: R2_SECRET_KEY },
+  });
+  console.log("R2 backup enabled:", R2_BUCKET, "@", R2_ENDPOINT);
+} else {
+  console.log("R2 backup disabled (no creds)");
+}
+
+async function uploadToR2(key, buffer, contentType) {
+  if (!r2) return;
+  try {
+    await r2.send(
+      new PutObjectCommand({
+        Bucket: R2_BUCKET,
+        Key: key,
+        Body: buffer,
+        ContentType: contentType,
+      })
+    );
+  } catch (e) {
+    console.warn("R2 upload failed (non-fatal):", e.message);
+  }
+}
 
 const ALLOWED_MIME = [
   "image/jpeg",
@@ -118,17 +153,26 @@ async function storePhoto(buffer, originalName, mimeType) {
 
   await fs.writeFile(path.join(PHOTOS_DIR, storedName), buffer);
 
+  // Upload original to R2 (fire-and-forget, non-fatal if it fails).
+  uploadToR2(`photos/${storedName}`, buffer, mimeType || "image/jpeg");
+
   // Thumbnail (max 600px wide, webp). Fallback to original on failure.
+  let thumbBuffer = null;
   try {
-    await sharp(buffer, { failOn: "none" })
+    thumbBuffer = await sharp(buffer, { failOn: "none" })
       .rotate()
       .resize({ width: 600, withoutEnlargement: true })
       .webp({ quality: 75 })
-      .toFile(path.join(THUMBS_DIR, thumbName));
+      .toBuffer();
+    await fs.writeFile(path.join(THUMBS_DIR, thumbName), thumbBuffer);
   } catch (e) {
     console.warn("Thumbnail failed, using original:", e.message);
+    thumbBuffer = buffer;
     await fs.writeFile(path.join(THUMBS_DIR, thumbName), buffer);
   }
+
+  // Upload thumbnail to R2 too (so fallback can serve thumbs).
+  if (thumbBuffer) uploadToR2(`thumbs/${thumbName}`, thumbBuffer, "image/webp");
 
   const meta = await readMeta();
   const entry = {
