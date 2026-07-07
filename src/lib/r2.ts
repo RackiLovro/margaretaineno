@@ -17,6 +17,11 @@ export function getR2(): S3Client {
     region: "auto",
     endpoint: R2_ENDPOINT,
     credentials: { accessKeyId: R2_ACCESS_KEY, secretAccessKey: R2_SECRET_KEY },
+    // Disable request checksums — AWS SDK v3.620+ adds x-amz-checksum-crc32
+    // to presigned URLs by default. R2 rejects uploads when the checksum
+    // doesn't match (it's computed on empty content, not the real file).
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
   });
   return client;
 }
