@@ -32,7 +32,6 @@ export default function RootLayout({
         />
       </head>
       <body className="font-body antialiased">
-        <div className="bg-sunset" aria-hidden />
         <div className="bg-stars" aria-hidden />
         {children}
       </body>
