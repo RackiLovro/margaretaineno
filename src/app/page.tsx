@@ -425,7 +425,7 @@ function Lightbox({
       onClick={onClose}
     >
       <button
-        onClick={onPrev}
+        onClick={(e) => { e.stopPropagation(); onPrev(); }}
         className="absolute left-4 z-10 flex h-12 w-12 items-center justify-center rounded-full bg-white/10 text-cream hover:bg-white/20"
       >
         ‹
@@ -437,13 +437,13 @@ function Lightbox({
         className="max-h-[88vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
       />
       <button
-        onClick={onNext}
+        onClick={(e) => { e.stopPropagation(); onNext(); }}
         className="absolute right-4 z-10 flex h-12 w-12 items-center justify-center rounded-full bg-white/10 text-cream hover:bg-white/20"
       >
         ›
       </button>
       <button
-        onClick={onClose}
+        onClick={(e) => { e.stopPropagation(); onClose(); }}
         className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-cream hover:bg-white/20"
       >
         ✕
